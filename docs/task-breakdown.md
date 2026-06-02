@@ -7,7 +7,7 @@ Process per task:
 1. Add task here
 2. Write `docs/plans/<YYYYMMDD>_<task>-<slug>.md` from `docs/TEMPLATE.md`
 3. Review plan
-4. Implement → PR
+4. `Workflow({ name: "implement-task", args: "<taskId>" })` — DB + BE + FE agents implement in parallel → verify passes → PR
 5. Mark task ✅ DONE here
 
 ---
