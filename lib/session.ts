@@ -1,6 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const secret = () => process.env.SESSION_SECRET || "dev-secret-change-me";
+const secret = () => {
+  const s = process.env.SESSION_SECRET;
+  if (s) return s;
+  // A known fallback secret lets anyone forge a session cookie; never allow it in production.
+  if (process.env.NODE_ENV === "production")
+    throw new Error("SESSION_SECRET env var is required in production");
+  return "dev-secret-change-me";
+};
 
 // Signed customer-session cookie: "<id>.<hmac>". Cannot be forged to impersonate.
 export function sign(id: number): string {
