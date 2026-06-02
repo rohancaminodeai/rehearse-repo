@@ -29,10 +29,19 @@ Why this work, now. Which Phase exit criterion in
 
 **Files touched:**
 
-| File | Change |
-|------|--------|
-| `lib/...` | added / modified |
-| `app/...` | added / modified |
+| File | Agent | Change |
+|------|-------|--------|
+| `lib/db.ts` | db-agent | added / modified |
+| `lib/....ts` | be-agent | added / modified |
+| `app/....tsx` | fe-agent | added / modified |
+
+**Inter-agent interface contract** (fill in for any new DB functions that FE or BE must import — both agents derive signatures from this table, not from reading each other's files):
+
+| Function | Full signature | Imported by |
+|----------|---------------|-------------|
+| `fnName` | `fnName(arg: Type): Promise<ReturnType>` | fe-agent via `import { fnName } from "@/lib/db"` |
+
+Delete this table if the task adds no new DB exports.
 
 **Implementation steps:**
 

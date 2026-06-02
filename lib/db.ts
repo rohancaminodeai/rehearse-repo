@@ -1,5 +1,20 @@
 import { Pool } from "pg";
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+
+// Deterministic, indexable token for O(1) login lookup. Peppered with a server
+// secret so the column alone can't be used to brute-force passwords offline.
+// Resolved lazily (not at import time) so a production build without the env
+// set doesn't fail page-data collection — it only matters at request time.
+function lookupPepper(): string {
+  const s = process.env.SESSION_SECRET;
+  if (s) return s;
+  if (process.env.NODE_ENV === "production")
+    throw new Error("SESSION_SECRET env var is required in production");
+  return "dev-secret-change-me";
+}
+function passwordLookup(pw: string): string {
+  return createHmac("sha256", lookupPepper()).update(pw).digest("hex");
+}
 
 export type Customer = { id: number; name: string };
 export type Record = {
@@ -38,7 +53,10 @@ function ready(): Promise<void> {
       .query(
         `CREATE TABLE IF NOT EXISTS customers (
            id serial PRIMARY KEY, name text NOT NULL, password_hash text NOT NULL,
-           created_at timestamptz DEFAULT now());
+           password_lookup text, created_at timestamptz DEFAULT now());
+         ALTER TABLE customers ADD COLUMN IF NOT EXISTS password_lookup text;
+         CREATE UNIQUE INDEX IF NOT EXISTS customers_password_lookup_idx
+           ON customers (password_lookup);
          CREATE TABLE IF NOT EXISTS records (
            id serial PRIMARY KEY, customer_id int NOT NULL REFERENCES customers(id),
            image_path text NOT NULL, comment text DEFAULT '',
@@ -80,8 +98,8 @@ export async function createCustomer(name: string, password: string): Promise<Cu
   // #1 password identifies the customer, so it must be unique; reject collisions
   if (await authenticateCustomer(password)) throw new Error("DUPLICATE_PASSWORD");
   const { rows } = await pool().query(
-    "INSERT INTO customers (name, password_hash) VALUES ($1, $2) RETURNING id, name",
-    [name, hashPassword(password)]
+    "INSERT INTO customers (name, password_hash, password_lookup) VALUES ($1, $2, $3) RETURNING id, name",
+    [name, hashPassword(password), passwordLookup(password)]
   );
   return rows[0];
 }
@@ -94,8 +112,14 @@ export async function listCustomers(): Promise<Customer[]> {
 
 export async function authenticateCustomer(password: string): Promise<Customer | null> {
   await ready();
-  const { rows } = await pool().query("SELECT id, name, password_hash FROM customers");
-  for (const r of rows) if (verifyPassword(password, r.password_hash)) return { id: r.id, name: r.name };
+  // Look up the single candidate row by deterministic token, then run the slow
+  // scrypt verify exactly once — avoids an O(N) scrypt scan (CPU-DoS) per login.
+  const { rows } = await pool().query(
+    "SELECT id, name, password_hash FROM customers WHERE password_lookup = $1",
+    [passwordLookup(password)]
+  );
+  const r = rows[0];
+  if (r && verifyPassword(password, r.password_hash)) return { id: r.id, name: r.name };
   return null;
 }
 
@@ -149,12 +173,12 @@ export async function toggleReaction(customerId: number, recordId: number, emoji
     "SELECT 1 FROM records WHERE id = $1 AND customer_id = $2",
     [recordId, customerId]
   );
-  if (owned.rowCount === 0) return; // non-owner: silently no-op
+  if (!owned.rowCount) return; // non-owner (or null rowCount): silently no-op
   const del = await pool().query(
     "DELETE FROM reactions WHERE record_id = $1 AND emoji = $2 RETURNING id",
     [recordId, emoji]
   );
-  if (del.rowCount === 0) {
+  if (!del.rowCount) {
     await pool().query(
       "INSERT INTO reactions (record_id, emoji) VALUES ($1, $2) ON CONFLICT DO NOTHING",
       [recordId, emoji]
